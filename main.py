@@ -2,6 +2,7 @@ import cv2
 import mediapipe as mp
 import time
 import math
+import numpy as np
 
 MODEL_PATH = "hand_landmarker.task"
 
@@ -16,6 +17,36 @@ def pixel_point(landmark, width, height):
         int(landmark.x * width),
         int(landmark.y * height),
     )
+
+
+def line_intersection(p1, p2, p3, p4):
+    x1, y1 = p1
+    x2, y2 = p2
+    x3, y3 = p3
+    x4, y4 = p4
+
+    denominator = (
+        (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+    )
+
+    if abs(denominator) < 0.0001:
+        return None
+
+    t = (
+        (x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)
+    ) / denominator
+
+    u = -(
+        (x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)
+    ) / denominator
+
+    # t and u are inside line segments
+    if 0 <= t <= 1 and 0 <= u <= 1:
+        collision_x = x1 + t * (x2 - x1)
+        collision_y = y1 + t * (y2 - y1)
+        return (int(collision_x), int(collision_y))
+
+    return None
 
 
 def distance(p1, p2):
@@ -39,6 +70,7 @@ line_x2, line_y2 = 0, 0
 
 line_x3, line_y3 = 0, 0
 line_x4, line_y4 = 0, 0
+
 
 with HandLandmarker.create_from_options(options) as landmarker:
     while True:
@@ -98,10 +130,61 @@ with HandLandmarker.create_from_options(options) as landmarker:
             line_x3, line_y3 = lx, ly
             line_x4, line_y4 = rx, ry
 
-        cv2.line(frame, (line_x1, line_y1), (line_x2, line_y2), (0, 0, 0), 1)
-        cv2.line(frame, (line_x3, line_y3), (line_x4, line_y4), (0, 0, 0), 1)
-        cv2.line(frame, (line_x1, line_y1), (line_x3, line_y3), (0, 0, 0,), 1)
-        cv2.line(frame, (line_x2, line_y2), (line_x4, line_y4), (0, 0, 0,), 1)
+            index_line_start = (ax, ay)
+            index_line_end = (bx, by)
+
+            thumb_line_start = (lx, ly)
+            thumb_line_end = (rx, ry)
+            collision = line_intersection(
+                index_line_start,
+                index_line_end,
+                thumb_line_start,
+                thumb_line_end,
+            )
+            points = np.array([
+                [line_x1, line_y1],
+                [line_x2, line_y2],
+                [line_x4, line_y4],
+                [line_x3, line_y3],
+
+            ], dtype=np.int32)
+
+            overlay = frame.copy()
+
+            cv2.fillPoly(overlay, [points], (255, 80, 0))
+            frame = cv2.addWeighted(overlay, 0.40, frame, 0.5, 0)
+            cv2.polylines(frame, [points], True, (255, 255, 255), 2)
+
+            if collision is not None:
+                collision_x, collision_y = collision
+                # Triangle between left hand's index, thumb, and crossing point
+                left_area = np.array([
+                    (ax, ay),             # left index
+                    (lx, ly),             # left thumb
+                    collision,
+                ], dtype=np.int32)
+
+                # Triangle between right hand's index, thumb, and crossing point
+                right_area = np.array([
+                    (bx, by),             # right index
+                    (rx, ry),             # right thumb
+                    collision,
+                ], dtype=np.int32)
+
+                # Draw transparent fills on an overlay
+                overlay = frame.copy()
+
+                # BGR colors
+                cv2.fillPoly(overlay, [left_area], (255, 80, 0))     # blue
+                cv2.fillPoly(overlay, [right_area],
+                             (0, 80, 255))    # red/orange
+
+                # Blend the colors with the webcam image
+                frame = cv2.addWeighted(overlay, 0.40, frame, 0.60, 0)
+
+                # Draw the area outlines
+                cv2.polylines(frame, [left_area], True, (255, 255, 255), 2)
+                cv2.polylines(frame, [right_area], True, (255, 255, 255), 2)
         cv2.putText(
             frame,
             "Pinch both hands to resize | Q to quit",
